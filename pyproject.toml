@@ -3,12 +3,13 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flowguard"
+name = "semcod-flowguard"
 version = "0.2.0"
 description = "Autonomous bounded concurrent dispatch and flow governor for Heyasa"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+keywords = ["dag", "scheduler", "concurrency", "aimd", "rate-limit", "backpressure"]
 authors = [{ name = "Tom Softreck", email = "tom@sapletta.com" }]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -16,6 +17,10 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/semcod/flowguard"
+Issues = "https://github.com/semcod/flowguard/issues"
 
 [project.optional-dependencies]
 dev = [

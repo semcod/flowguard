@@ -16,6 +16,12 @@ Just as **Hostguard** protects hardware from resource exhaustion (CPU, RAM, stor
 - **`QuarantineManager`**: Fast-fails and segregates known failure signatures into quarantine receipts without stalling the run loop.
 - **`FlowEngine`**: Asynchronous orchestration engine dispatching ready nodes across available slots.
 
+## Install
+
+```bash
+pip install semcod-flowguard   # imports as `flowguard`
+```
+
 ## Quickstart
 
 ```python
