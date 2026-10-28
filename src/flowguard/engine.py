@@ -86,18 +86,24 @@ class FlowEngine:
 
         while not dag.is_finished() or running_tasks:
             # 1. Check current admissible capacity
-            admissible_slots = self.governor.evaluate_capacity()
-            available_slots = max(0, admissible_slots - len(running_tasks))
+            snapshot = self.governor.snapshot()
+            running_io = sum(1 for n in running_tasks.values() if n.resource_type == "io")
+            available_slots = max(0, self.governor.evaluate_capacity(snapshot) - (len(running_tasks) - running_io))
+            available_io = max(0, self.governor.evaluate_io_capacity(snapshot) - running_io)
 
             # 2. Schedule ready tasks up to available slot capacity
-            if available_slots > 0:
+            if available_slots > 0 or available_io > 0:
                 for node in dag.get_ready_tasks():
-                    if available_slots <= 0:
-                        break
+                    is_io = node.resource_type == "io"
+                    if (available_io if is_io else available_slots) <= 0:
+                        continue
                     # A backed-off provider or a busy resource defers only this task.
                     if self._deferred(node) or not self._try_acquire(node):
                         continue
-                    available_slots -= 1
+                    if is_io:
+                        available_io -= 1
+                    else:
+                        available_slots -= 1
                     node.attempts += 1
                     node.status = TaskStatus.RUNNING
                     node.started_at = time.monotonic()

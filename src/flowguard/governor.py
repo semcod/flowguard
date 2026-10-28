@@ -39,6 +39,7 @@ class ResourceLimits:
     exclusive_prefixes: tuple[str, ...] = ("writer:",)
     max_rate_limit_retries: int = 3
     default_retry_after_seconds: float = 15.0
+    max_io_slots: int = 8
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ResourceLimits":
@@ -135,6 +136,16 @@ class FlowGovernor:
 
     def is_provider_limited(self, provider: str) -> bool:
         return time.monotonic() < self._provider_backoff_until.get(provider, 0.0)
+
+    def snapshot(self) -> ResourceSnapshot:
+        return self._snapshot_source()
+
+    def evaluate_io_capacity(self, snapshot: ResourceSnapshot | None = None) -> int:
+        """Slots for I/O-bound tasks (remote calls): CPU load does not throttle them, RAM does."""
+        snap = snapshot or self._snapshot_source()
+        if snap.ram_free_gb < self.limits.min_free_ram_gb:
+            return self.limits.min_concurrent_slots
+        return self.limits.max_io_slots
 
     @property
     def is_rate_limited(self) -> bool:

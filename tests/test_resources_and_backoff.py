@@ -115,3 +115,29 @@ def test_limits_from_policy_mapping_fail_closed():
     assert limits.capacity_of("cpu") is None
     with pytest.raises(ValueError, match="Unknown"):
         ResourceLimits.from_mapping({"max_slots": 4})
+
+
+async def test_io_tasks_are_not_throttled_by_cpu_load():
+    def loaded():
+        return ResourceSnapshot(cpu_load_1m=24.0, cpu_count=16, ram_total_mb=65536.0,
+                                ram_available_mb=40000.0, timestamp=0.0)
+    tracker = Tracker()
+    dag = TaskDAG()
+    for i in range(4):
+        dag.add_task(f"io{i}", tracker.task("io"), resource_type="io")
+        dag.add_task(f"cpu{i}", tracker.task("cpu"))
+    governor = FlowGovernor(ResourceLimits(max_io_slots=4), snapshot_source=loaded)
+    await FlowEngine(governor=governor).execute_dag(dag)
+    assert tracker.peak == {"io": 4, "cpu": 1}
+
+
+async def test_io_tasks_back_off_when_ram_is_critical():
+    def low_ram():
+        return ResourceSnapshot(cpu_load_1m=0.1, cpu_count=16, ram_total_mb=65536.0,
+                                ram_available_mb=512.0, timestamp=0.0)
+    tracker = Tracker()
+    dag = TaskDAG()
+    for i in range(3):
+        dag.add_task(f"io{i}", tracker.task("io"), resource_type="io")
+    await FlowEngine(governor=FlowGovernor(ResourceLimits(), snapshot_source=low_ram)).execute_dag(dag)
+    assert tracker.peak == {"io": 1}

@@ -54,6 +54,8 @@ limits = ResourceLimits.from_mapping({
 - A task raising `RateLimited(retry_after=..)` (or a 429 message) backs off only its
   provider and is requeued up to `max_rate_limit_retries`; other providers keep running.
 - `blocking=True` runs a synchronous callable in a worker thread.
+- `resource_type="io"` marks remote/I/O-bound work: it uses `max_io_slots`, is not
+  throttled by host CPU load, and still drops to the minimum when RAM is critical.
 - Flowguard schedules admitted work only; it grants no execution authority.
 
 ## Testing
