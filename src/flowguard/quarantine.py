@@ -36,6 +36,11 @@ class QuarantineManager:
     def __init__(self) -> None:
         self._records: list[QuarantineRecord] = []
 
+    @classmethod
+    def is_rate_limit(cls, error_message: str) -> bool:
+        return any(code == GateFailureClassification.PROVIDER_RATE_LIMIT and pattern.search(error_message)
+                   for pattern, code, _ in cls.DETERMINISTIC_PATTERNS)
+
     def classify_and_quarantine(self, task_id: str, error_message: str, timestamp: float) -> tuple[GateFailureClassification, bool]:
         """Classify error message and record in quarantine ledger."""
         for pattern, classification, retryable in self.DETERMINISTIC_PATTERNS:

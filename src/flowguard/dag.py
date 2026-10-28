@@ -22,6 +22,10 @@ class TaskNode:
     action: Callable[[], Coroutine[Any, Any, Any]]
     needs: list[str] = field(default_factory=list)
     resource_type: str = "cpu"
+    resources: dict[str, int] = field(default_factory=dict)
+    provider: str | None = None
+    blocking: bool = False
+    attempts: int = 0
     status: TaskStatus = TaskStatus.PENDING
     result: Any = None
     error: str | None = None
@@ -41,7 +45,16 @@ class TaskDAG:
         action: Callable[[], Coroutine[Any, Any, Any]],
         needs: list[str] | None = None,
         resource_type: str = "cpu",
+        resources: dict[str, int] | None = None,
+        provider: str | None = None,
+        blocking: bool = False,
     ) -> None:
+        """Declare a task.
+
+        ``resources`` names counted resources such as ``engine:willman`` or the
+        exclusive ``writer:<repo>/<worktree>``. ``provider`` scopes rate-limit
+        backoff. ``blocking`` runs a synchronous callable in a worker thread.
+        """
         if task_id in self._nodes:
             raise ValueError(f"Task '{task_id}' already declared in DAG")
         self._nodes[task_id] = TaskNode(
@@ -49,7 +62,20 @@ class TaskDAG:
             action=action,
             needs=list(needs or []),
             resource_type=resource_type,
+            resources=dict(resources or {}),
+            provider=provider,
+            blocking=blocking,
         )
+
+    @property
+    def nodes(self) -> list[TaskNode]:
+        return list(self._nodes.values())
+
+    def requeue(self, task_id: str) -> None:
+        """Return a deferred task to the ready pool without recording a failure."""
+        node = self._nodes[task_id]
+        node.status = TaskStatus.PENDING
+        node.started_at = None
 
     def get_node(self, task_id: str) -> TaskNode | None:
         return self._nodes.get(task_id)
@@ -83,7 +109,7 @@ class TaskDAG:
 
             if any_dep_failed:
                 node.status = TaskStatus.SKIPPED
-                node.error = f"Parent dependency failed/skipped"
+                node.error = "Parent dependency failed/skipped"
             elif deps_completed:
                 ready.append(node)
 

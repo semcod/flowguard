@@ -12,6 +12,16 @@ from flowguard.dag import TaskDAG, TaskNode, TaskStatus
 from flowguard.quarantine import QuarantineManager, GateFailureClassification
 
 
+class RateLimited(Exception):
+    """Raised by a task when its provider refuses work for ``retry_after`` seconds."""
+
+    def __init__(self, message: str = "rate limited", retry_after: float | None = None,
+                 provider: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.provider = provider
+
+
 @dataclass(frozen=True)
 class TaskExecutionReceipt:
     task_id: str
@@ -20,6 +30,7 @@ class TaskExecutionReceipt:
     result: Any = None
     error: str | None = None
     quarantine_code: GateFailureClassification | None = None
+    attempts: int = 1
 
 
 class FlowEngine:
@@ -32,10 +43,46 @@ class FlowEngine:
     ) -> None:
         self.governor = governor or FlowGovernor()
         self.quarantine = quarantine or QuarantineManager()
+        self._in_use: dict[str, int] = {}
+
+    def _validate_demands(self, dag: TaskDAG) -> None:
+        for node in dag.nodes:
+            for resource, amount in node.resources.items():
+                capacity = self.governor.limits.capacity_of(resource)
+                if amount < 1 or (capacity is not None and amount > capacity):
+                    raise ValueError(
+                        f"Task '{node.id}' requests {amount} of '{resource}' (capacity {capacity})"
+                    )
+
+    def _provider(self, node: TaskNode) -> str | None:
+        return node.provider or (node.resource_type if node.resource_type.startswith("llm") else None)
+
+    def _deferred(self, node: TaskNode) -> bool:
+        provider = self._provider(node)
+        if provider is None:
+            return False
+        if node.resource_type.startswith("llm") and self.governor.is_rate_limited:
+            return True
+        return self.governor.is_provider_limited(provider)
+
+    def _try_acquire(self, node: TaskNode) -> bool:
+        limits = self.governor.limits
+        for resource, amount in node.resources.items():
+            capacity = limits.capacity_of(resource)
+            if capacity is not None and self._in_use.get(resource, 0) + amount > capacity:
+                return False
+        for resource, amount in node.resources.items():
+            self._in_use[resource] = self._in_use.get(resource, 0) + amount
+        return True
+
+    def _release(self, node: TaskNode) -> None:
+        for resource, amount in node.resources.items():
+            self._in_use[resource] = self._in_use.get(resource, 0) - amount
 
     async def execute_dag(self, dag: TaskDAG, poll_interval: float = 0.05) -> list[TaskExecutionReceipt]:
         receipts: list[TaskExecutionReceipt] = []
         running_tasks: dict[asyncio.Task, TaskNode] = {}
+        self._validate_demands(dag)
 
         while not dag.is_finished() or running_tasks:
             # 1. Check current admissible capacity
@@ -44,12 +91,14 @@ class FlowEngine:
 
             # 2. Schedule ready tasks up to available slot capacity
             if available_slots > 0:
-                ready_nodes = dag.get_ready_tasks()
-                for node in ready_nodes[:available_slots]:
-                    # Check rate limiting for provider tasks
-                    if node.resource_type.startswith("llm") and self.governor.is_rate_limited:
+                for node in dag.get_ready_tasks():
+                    if available_slots <= 0:
+                        break
+                    # A backed-off provider or a busy resource defers only this task.
+                    if self._deferred(node) or not self._try_acquire(node):
                         continue
-
+                    available_slots -= 1
+                    node.attempts += 1
                     node.status = TaskStatus.RUNNING
                     node.started_at = time.monotonic()
                     task = asyncio.create_task(self._run_node(node))
@@ -64,13 +113,16 @@ class FlowEngine:
                 continue
 
             # 4. Wait for at least one running task to complete
+            # The timeout re-admits tasks deferred by an expired backoff or a freed slot.
             done, _ = await asyncio.wait(
                 running_tasks.keys(),
+                timeout=poll_interval,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
             for finished_task in done:
                 node = running_tasks.pop(finished_task)
+                self._release(node)
                 node.completed_at = time.monotonic()
                 duration = node.completed_at - (node.started_at or node.completed_at)
 
@@ -83,16 +135,17 @@ class FlowEngine:
                             status=TaskStatus.COMPLETED,
                             duration_seconds=duration,
                             result=result,
+                            attempts=node.attempts,
                         )
                     )
                 except Exception as exc:
                     err_msg = str(exc)
+                    if self._retry_rate_limited(dag, node, exc):
+                        continue
                     classification, retryable = self.quarantine.classify_and_quarantine(
                         node.id, err_msg, time.time()
                     )
 
-                    if classification == GateFailureClassification.PROVIDER_RATE_LIMIT:
-                        self.governor.signal_rate_limit(retry_after_seconds=15.0)
 
                     dag.mark_quarantined(node.id, f"{classification.value}: {err_msg}")
                     receipts.append(
@@ -102,6 +155,7 @@ class FlowEngine:
                             duration_seconds=duration,
                             error=err_msg,
                             quarantine_code=classification,
+                            attempts=node.attempts,
                         )
                     )
 
@@ -121,5 +175,25 @@ class FlowEngine:
 
         return receipts
 
+    def _retry_rate_limited(self, dag: TaskDAG, node: TaskNode, exc: Exception) -> bool:
+        """Back off the task's provider and requeue it while retries remain."""
+        limits = self.governor.limits
+        if isinstance(exc, RateLimited):
+            retry_after, provider = exc.retry_after, exc.provider or self._provider(node)
+        elif QuarantineManager.is_rate_limit(str(exc)):
+            retry_after, provider = None, self._provider(node)
+        else:
+            return False
+        self.governor.signal_rate_limit(
+            retry_after_seconds=limits.default_retry_after_seconds if retry_after is None else retry_after,
+            provider=provider,
+        )
+        if node.attempts > limits.max_rate_limit_retries:
+            return False
+        dag.requeue(node.id)
+        return True
+
     async def _run_node(self, node: TaskNode) -> Any:
+        if node.blocking:
+            return await asyncio.to_thread(node.action)
         return await node.action()
