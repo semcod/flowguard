@@ -33,7 +33,7 @@ class Tracker:
         return run
 
 
-async def test_writer_resource_is_exclusive_per_worktree():
+async def _test_writer_resource_is_exclusive_per_worktree():
     tracker = Tracker()
     dag = TaskDAG()
     for i in range(3):
@@ -44,7 +44,7 @@ async def test_writer_resource_is_exclusive_per_worktree():
     assert tracker.peak == {"repo/wt-a": 1, "repo/wt-b": 1}
 
 
-async def test_engine_capacity_bounds_concurrency():
+async def _test_engine_capacity_bounds_concurrency():
     tracker = Tracker()
     dag = TaskDAG()
     for i in range(5):
@@ -53,7 +53,7 @@ async def test_engine_capacity_bounds_concurrency():
     assert tracker.peak["willman"] == 2
 
 
-async def test_rate_limit_defers_only_its_provider():
+async def _test_rate_limit_defers_only_its_provider():
     calls = {"a": 0}
     finished = {}
 
@@ -79,7 +79,7 @@ async def test_rate_limit_defers_only_its_provider():
     assert finished["a"] - start >= 0.2
 
 
-async def test_rate_limit_retries_are_bounded():
+async def _test_rate_limit_retries_are_bounded():
     async def always_limited():
         raise RateLimited("429 Too Many Requests", retry_after=0.0)
 
@@ -90,7 +90,7 @@ async def test_rate_limit_retries_are_bounded():
     assert receipt.attempts == 3
 
 
-async def test_blocking_tasks_run_in_parallel_threads():
+async def _test_blocking_tasks_run_in_parallel_threads():
     dag = TaskDAG()
     for i in range(3):
         dag.add_task(f"s{i}", lambda: time.sleep(0.1) or "ok", blocking=True)
@@ -100,7 +100,7 @@ async def test_blocking_tasks_run_in_parallel_threads():
     assert time.monotonic() - start < 0.25
 
 
-async def test_unsatisfiable_demand_is_rejected_before_execution():
+async def _test_unsatisfiable_demand_is_rejected_before_execution():
     dag = TaskDAG()
     dag.add_task("x", lambda: asyncio.sleep(0), resources={"writer:repo/wt": 2})
     with pytest.raises(ValueError, match="capacity 1"):
@@ -117,7 +117,7 @@ def test_limits_from_policy_mapping_fail_closed():
         ResourceLimits.from_mapping({"max_slots": 4})
 
 
-async def test_io_tasks_are_not_throttled_by_cpu_load():
+async def _test_io_tasks_are_not_throttled_by_cpu_load():
     def loaded():
         return ResourceSnapshot(cpu_load_1m=24.0, cpu_count=16, ram_total_mb=65536.0,
                                 ram_available_mb=40000.0, timestamp=0.0)
@@ -131,7 +131,7 @@ async def test_io_tasks_are_not_throttled_by_cpu_load():
     assert tracker.peak == {"io": 4, "cpu": 1}
 
 
-async def test_io_tasks_back_off_when_ram_is_critical():
+async def _test_io_tasks_back_off_when_ram_is_critical():
     def low_ram():
         return ResourceSnapshot(cpu_load_1m=0.1, cpu_count=16, ram_total_mb=65536.0,
                                 ram_available_mb=512.0, timestamp=0.0)
@@ -141,3 +141,35 @@ async def test_io_tasks_back_off_when_ram_is_critical():
         dag.add_task(f"io{i}", tracker.task("io"), resource_type="io")
     await FlowEngine(governor=FlowGovernor(ResourceLimits(), snapshot_source=low_ram)).execute_dag(dag)
     assert tracker.peak == {"io": 1}
+
+
+def test_writer_resource_is_exclusive_per_worktree():
+    asyncio.run(_test_writer_resource_is_exclusive_per_worktree())
+
+
+def test_engine_capacity_bounds_concurrency():
+    asyncio.run(_test_engine_capacity_bounds_concurrency())
+
+
+def test_rate_limit_defers_only_its_provider():
+    asyncio.run(_test_rate_limit_defers_only_its_provider())
+
+
+def test_rate_limit_retries_are_bounded():
+    asyncio.run(_test_rate_limit_retries_are_bounded())
+
+
+def test_blocking_tasks_run_in_parallel_threads():
+    asyncio.run(_test_blocking_tasks_run_in_parallel_threads())
+
+
+def test_unsatisfiable_demand_is_rejected_before_execution():
+    asyncio.run(_test_unsatisfiable_demand_is_rejected_before_execution())
+
+
+def test_io_tasks_are_not_throttled_by_cpu_load():
+    asyncio.run(_test_io_tasks_are_not_throttled_by_cpu_load())
+
+
+def test_io_tasks_back_off_when_ram_is_critical():
+    asyncio.run(_test_io_tasks_back_off_when_ram_is_critical())
