@@ -51,8 +51,7 @@ def test_quarantine_classification():
     assert len(qm.records) == 2
 
 
-@pytest.mark.asyncio
-async def test_flowguard_parallel_execution_and_hol_isolation():
+async def _test_flowguard_parallel_execution_and_hol_isolation():
     """Verify that independent tasks run concurrently and failure in branch A doesn't block branch B."""
     dag = TaskDAG()
     execution_order = []
@@ -108,3 +107,7 @@ async def test_flowguard_parallel_execution_and_hol_isolation():
     assert "b1" in execution_order
     assert "b2" in execution_order
     assert "a3" not in execution_order
+
+
+def test_flowguard_parallel_execution_and_hol_isolation():
+    asyncio.run(_test_flowguard_parallel_execution_and_hol_isolation())
