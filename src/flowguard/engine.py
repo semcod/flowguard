@@ -80,9 +80,36 @@ class FlowEngine:
             self._in_use[resource] = self._in_use.get(resource, 0) - amount
 
     async def execute_dag(self, dag: TaskDAG, poll_interval: float = 0.05) -> list[TaskExecutionReceipt]:
-        receipts: list[TaskExecutionReceipt] = []
+        """Execute admitted work; cancellation waits for actual action cleanup."""
         running_tasks: dict[asyncio.Task, TaskNode] = {}
         self._validate_demands(dag)
+        try:
+            return await self._execute_dag(dag, poll_interval, running_tasks)
+        finally:
+            for task in running_tasks:
+                task.cancel()
+            interrupted = await self._drain(running_tasks)
+            for node in running_tasks.values():
+                self._release(node)
+                node.completed_at = time.monotonic()
+                dag.mark_failed(node.id, "Execution interrupted; effects may have occurred")
+            if interrupted:
+                raise asyncio.CancelledError
+
+    @staticmethod
+    async def _drain(tasks) -> bool:
+        """Join owned tasks even if the caller receives repeated cancellation."""
+        waiter = asyncio.gather(*tasks, return_exceptions=True)
+        interrupted = False
+        while not waiter.done():
+            try:
+                await asyncio.shield(waiter)
+            except asyncio.CancelledError:
+                interrupted = True
+        return interrupted
+
+    async def _execute_dag(self, dag, poll_interval, running_tasks) -> list[TaskExecutionReceipt]:
+        receipts: list[TaskExecutionReceipt] = []
 
         while not dag.is_finished() or running_tasks:
             # 1. Check current admissible capacity
@@ -144,6 +171,13 @@ class FlowEngine:
                             attempts=node.attempts,
                         )
                     )
+                except asyncio.CancelledError:
+                    error = "Action cancelled; effects may have occurred"
+                    dag.mark_failed(node.id, error)
+                    receipts.append(TaskExecutionReceipt(
+                        task_id=node.id, status=TaskStatus.FAILED, duration_seconds=duration,
+                        error=error, attempts=node.attempts,
+                    ))
                 except Exception as exc:
                     err_msg = str(exc)
                     if self._retry_rate_limited(dag, node, exc):
@@ -201,5 +235,11 @@ class FlowEngine:
 
     async def _run_node(self, node: TaskNode) -> Any:
         if node.blocking:
-            return await asyncio.to_thread(node.action)
+            worker = asyncio.create_task(asyncio.to_thread(node.action))
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Cancelling a Future cannot stop its underlying OS thread.
+                await self._drain([worker])
+                raise
         return await node.action()

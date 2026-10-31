@@ -24,3 +24,5 @@ htmlcov/
 .venv
 venv/
 ENV/
+/.worktrees/
+/.subactor/leases/
