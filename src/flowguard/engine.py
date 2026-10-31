@@ -82,6 +82,7 @@ class FlowEngine:
     async def execute_dag(self, dag: TaskDAG, poll_interval: float = 0.05) -> list[TaskExecutionReceipt]:
         """Execute admitted work; cancellation waits for actual action cleanup."""
         running_tasks: dict[asyncio.Task, TaskNode] = {}
+        dag.validate()
         self._validate_demands(dag)
         try:
             return await self._execute_dag(dag, poll_interval, running_tasks)
