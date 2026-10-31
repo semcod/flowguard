@@ -64,6 +64,24 @@ limits = ResourceLimits.from_mapping({
   throttled by host CPU load, and still drops to the minimum when RAM is critical.
 - Flowguard schedules admitted work only; it grants no execution authority.
 
+## Cancellation and shutdown
+
+Cancelling `execute_dag` cancels its running async actions and waits for their
+cleanup before propagating `CancelledError`. Repeated cancellation does not
+interrupt that cleanup. Interrupted nodes become `FAILED` with a note that
+effects may have occurred; cancellation does not roll back work or authorize
+automatic retries. Unstarted nodes are left unexecuted.
+
+A blocking callable runs in an OS thread, which cannot be stopped by cancelling
+its asyncio wrapper. Flowguard waits for the actual callable to finish before
+releasing its resources, including exclusive `writer:*` reservations. Blocking
+actions should provide their own bounded I/O or cooperative stop mechanism;
+shutdown can otherwise wait indefinitely for them.
+
+An action that cancels itself becomes a failed node: dependent tasks are skipped,
+while independent branches continue. Scheduler failures also drain running
+actions before releasing ownership, allowing the engine to be reused safely.
+
 ## Testing
 
 ```bash
