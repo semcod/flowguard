@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, Callable, Coroutine
 
 
@@ -79,6 +80,18 @@ class TaskDAG:
 
     def get_node(self, task_id: str) -> TaskNode | None:
         return self._nodes.get(task_id)
+
+    def validate(self) -> None:
+        """Reject incomplete or cyclic graphs without changing task state."""
+        for node in self._nodes.values():
+            for parent_id in node.needs:
+                if parent_id not in self._nodes:
+                    raise KeyError(f"Dependency '{parent_id}' not found for task '{node.id}'")
+        try:
+            TopologicalSorter({node.id: node.needs for node in self._nodes.values()}).prepare()
+        except CycleError as error:
+            cycle = " -> ".join(map(str, error.args[1]))
+            raise ValueError(f"DependencyCycle: {cycle}") from error
 
     def is_finished(self) -> bool:
         return all(

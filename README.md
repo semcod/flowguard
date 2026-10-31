@@ -64,6 +64,15 @@ limits = ResourceLimits.from_mapping({
   throttled by host CPU load, and still drops to the minimum when RAM is critical.
 - Flowguard schedules admitted work only; it grants no execution authority.
 
+## Dependency validation
+
+`execute_dag` validates the entire graph before starting actions or reserving
+resources. Missing parents raise `KeyError`; cycles, including self-dependencies,
+raise `ValueError` with a `DependencyCycle` diagnostic. Invalid graphs leave task
+states unchanged, even when an earlier parent is pending or has already failed.
+Forward declarations, shared parents and duplicate dependency references remain
+supported. Validation handles deep graphs without recursive traversal.
+
 ## Cancellation and shutdown
 
 Cancelling `execute_dag` cancels its running async actions and waits for their
